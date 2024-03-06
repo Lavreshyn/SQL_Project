@@ -1,0 +1,138 @@
+    --Purchase event 1st table:
+WITH purchase as
+(
+SELECT
+  SUBSTR(event_date, 5, 2) month,
+  RIGHT((SELECT value.string_value FROM UNNEST(event_params) WHERE key='page_locale'),2) country,
+  CONCAT(user_pseudo_id, (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id')) user,
+  (SELECT value.string_value FROM UNNEST(event_params) WHERE key='coupon') PCoupon,
+  count(*) number
+FROM `fc-ecom-prod.analytics_313640305.events_intraday_*`
+  WHERE 
+    _table_suffix between '20240101' and '20240101'
+    AND event_name = 'purchase'
+GROUP BY
+  month,
+  country,
+  user,
+  PCoupon
+),
+
+    --Purchase event 2nd table:
+P as
+(
+  SELECT
+  user,
+  month,
+  country,
+  SUM(CASE WHEN PCoupon IS NULL THEN 1 END) Purchase,
+  SUM(CASE WHEN PCoupon IS NOT NULL THEN 1 END) PurchaseCoupon
+FROM purchase
+  WHERE
+    user IS NOT NULL
+GROUP BY
+  user,
+  month,
+  country
+),
+
+    --Session_start event 1st table:
+start as
+(
+SELECT
+  SUBSTR(event_date, 5, 2) month,
+  UPPER(RIGHT((SELECT value.string_value FROM UNNEST(event_params) WHERE key='page_locale'),2)) country,
+  CONCAT(user_pseudo_id, (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id')) user,
+  count(*) number
+FROM `fc-ecom-prod.analytics_313640305.events_intraday_*`
+  WHERE
+    _table_suffix between '20240101' and '20240101'
+    AND event_name = 'session_start'
+GROUP BY
+  month,
+  country,
+  user
+),
+
+    --Session_start event 2nd table:
+S as
+(
+SELECT
+  user,
+  month,
+  country,
+  number Started
+FROM start
+  WHERE
+    user IS NOT NULL
+    AND country IS NOT NULL
+),
+
+    --BeginCheckout event 1st table:
+beginCheckout as
+(
+SELECT
+  SUBSTR(event_date, 5, 2) month,
+  UPPER(RIGHT((SELECT value.string_value FROM UNNEST(event_params) WHERE key='page_locale'),2)) country,
+  CONCAT(user_pseudo_id, (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id')) user,
+  (SELECT value.string_value FROM UNNEST(event_params) WHERE key='coupon') coupon,
+  count(*) number
+FROM `fc-ecom-prod.analytics_313640305.events_intraday_*`
+  WHERE
+    _table_suffix between '20240101' and '20240101'
+    AND event_name = 'begin_checkout'
+GROUP BY
+  month,
+  country,
+  user,
+  coupon
+),
+
+    --BeginCheckout event 2nd table:
+BC as
+(
+SELECT
+  user,
+  month,
+  country,
+  coupon,
+  SUM(CASE WHEN coupon IS NULL THEN 1 END) BC,
+  SUM(CASE WHEN coupon IS NOT NULL THEN 1 END) BCCoupon
+FROM beginCheckout
+  GROUP BY
+    month,
+    country,
+    user,
+    coupon
+),
+
+    --Final table:
+F as
+(
+  SELECT
+  S.user,
+  S.month,
+  S.country,
+  S.Started,
+  BC.BC col1,
+  BC.BCCoupon col2,
+  P.Purchase col3,
+  P.PurchaseCoupon col4  
+FROM S
+  LEFT JOIN P ON S.user = P.user AND S.month = P.month
+  LEFT JOIN BC ON S.user = BC.user AND S.month = BC.month
+  WHERE
+    S.country IN ('DE','AT','NL','BE','LU')
+)
+
+    --Final SELECT:
+SELECT
+  F.user,
+  F.month,
+  F.country,
+  F.Started,
+  CASE WHEN col4 IS NULL AND col3 IS NULL AND col2 IS NULL AND col1 IS NOT NULL THEN 1 END BC,
+  CASE WHEN col4 IS NULL AND col3 IS NULL AND col2 IS NOT NULL THEN 1 END BCC,
+  CASE WHEN col4 IS NULL AND col3 IS NOT NULL THEN 1 END PC,
+  CASE WHEN col4 IS NOT NULL THEN 1 END PCC
+FROM F
